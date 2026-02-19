@@ -1,0 +1,41 @@
+{
+  "name": "crewly",
+  "version": "1.0.0",
+  "description": "Professional AI crews for your code agent. Morgan specs, DevCrew builds, QA validates.",
+  "author": "Crewly Codes",
+  "license": "MIT",
+  "homepage": "https://crewly.codes",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/crewlycodes/skills"
+  },
+  "skills": [
+    {
+      "name": "crewly-connector",
+      "path": "crewly-connector/SKILL.md",
+      "description": "Authenticates with Crewly Codes and fetches Morgan-generated specs."
+    },
+    {
+      "name": "devcrew",
+      "path": "devcrew/SKILL.md",
+      "description": "Implementation agent that builds features from Morgan specs."
+    },
+    {
+      "name": "qa",
+      "path": "qa/SKILL.md",
+      "description": "Validation agent that reviews implementations against specs."
+    }
+  ],
+  "keywords": [
+    "agent-skills",
+    "ai-coding",
+    "code-agent",
+    "claude-code",
+    "codex",
+    "copilot",
+    "cursor",
+    "gemini",
+    "development",
+    "automation"
+  ]
+}
