@@ -1,157 +1,219 @@
 ---
 name: crewly-connector
-description: Connects to Crewly Codes to authenticate and fetch feature specs. Use when user says "connect to crewly", "load spec", "fetch card", "get crewly spec", "login to crewly", or mentions a Crewly card ID.
+description: Connects to Crewly Codes to authenticate, fetch feature specs, and verify Morgan hash for full traceability. Triggers on "connect to crewly", "load spec", "fetch card", "get crewly spec", "login to crewly", "load my spec from crewly", or any mention of a Crewly card/board ID.
 ---
 
 # Crewly Connector
 
-Authenticates with Crewly Codes via email OTP and fetches feature specifications for implementation.
+Authenticates with Crewly Codes via email OTP, fetches feature specifications, and verifies Morgan hash for ThoughtChain traceability.
 
-## Configuration
+## Input Contract
 
-The following values are needed (user should have these from Crewly setup):
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| email | string | yes | User's registered email |
+| board_id | string | yes | UUID of the board to access |
+| card_id | string | no | Specific card to fetch (optional) |
 
-```
-CREWLY_SUPABASE_URL=https://xbwbyfvxtfwpkrxjnpyq.supabase.co
-CREWLY_ANON_KEY=[from crewly settings or .env]
-```
+## Output Contract
 
-## Authentication Flow
-
-### Step 1: Initiate Connection
-
-When user wants to connect to Crewly:
-
-1. Ask for their **email address** (the one registered with Crewly Codes)
-2. Ask for the **Board ID** they want to access
-
-### Step 2: Request OTP
-
-Make a POST request to Supabase to trigger OTP:
-
-```bash
-curl -X POST "${CREWLY_SUPABASE_URL}/auth/v1/otp" \
-  -H "apikey: ${CREWLY_ANON_KEY}" \
-  -H "Content-Type: application/json" \
-  -d '{"email": "USER_EMAIL", "create_user": false}'
-```
-
-Response on success:
-```json
-{"message_id": "..."}
-```
-
-Tell the user: "Check your email for a one-time code from Crewly."
-
-### Step 3: Verify OTP
-
-When user provides the OTP code:
-
-```bash
-curl -X POST "${CREWLY_SUPABASE_URL}/auth/v1/verify" \
-  -H "apikey: ${CREWLY_ANON_KEY}" \
-  -H "Content-Type: application/json" \
-  -d '{"email": "USER_EMAIL", "token": "CODE_FROM_EMAIL", "type": "email"}'
-```
-
-Response contains access token:
 ```json
 {
-  "access_token": "eyJ...",
-  "token_type": "bearer",
-  "expires_in": 3600,
-  "user": {...}
+  "spec": {
+    "card_id": "uuid",
+    "title": "Feature Title",
+    "morgan_hash": "sha256:...",
+    "spec_json": {
+      "story": { "as_a": "...", "i_want": "...", "so_that": "..." },
+      "acceptance_criteria": [...],
+      "dependencies": [...],
+      "risks": [...],
+      "open_questions": [...],
+      "stub_suggestions": [...]
+    }
+  },
+  "morgan_verified": true,
+  "features": {
+    "traceability": true,
+    "bugs_yaml": true,
+    "trace_jsonl": true,
+    "thoughtchain": true
+  },
+  "access_token": "jwt..."
 }
 ```
 
-Store `access_token` for subsequent requests.
+## Configuration
+
+Baked-in values (no user configuration needed):
+
+```bash
+CREWLY_API_URL="https://api.crewly.codes"
+CREWLY_API_KEY="sb_publishable_ulOfuc_3ZOZSpsxiZxpg9A_dDUbX8ep"
+```
+
+The API key is publishable (RLS controls access).
+
+## Scripts
+
+Use deterministic scripts for all API operations:
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/auth.sh request <email>` | Request OTP |
+| `scripts/auth.sh verify <email> <otp>` | Verify OTP, get token |
+| `scripts/fetch-specs.sh <board_id> <token>` | Fetch locked specs |
+| `scripts/verify-hash.sh <card_id> <hash> <token>` | Verify Morgan hash |
+| `scripts/update-status.sh <card_id> <agent> <state> [msg] <token> [board_id]` | Update card status (realtime) |
+| `scripts/move-card.sh <card_id> <column> <board_id> <token>` | Move card to column (realtime) |
+
+### Realtime Updates
+
+Pass `board_id` to `update-status.sh` and `move-card.sh` to enable realtime updates in the web app:
+
+```bash
+# With board_id — triggers instant UI update
+./scripts/update-status.sh "$CARD_ID" "DevCrew" "building" "Iteration 1/5" "$TOKEN" "$BOARD_ID"
+
+# Without board_id — updates database only, UI updates on refresh
+./scripts/update-status.sh "$CARD_ID" "DevCrew" "building" "Iteration 1/5" "$TOKEN"
+```
+
+The `move-card.sh` script always broadcasts (board_id is required).
+
+## Authentication Flow
+
+### Step 1: Collect Info
+
+Ask user for:
+1. **Email address** (registered with Crewly Codes)
+2. **Board ID** they want to access
+
+### Step 2: Request OTP
+
+```bash
+./scripts/auth.sh request "user@example.com"
+```
+
+**Success:** `{"status": "sent", "message": "OTP sent to user@example.com"}`
+
+Tell user: "Check your email for a one-time code from Crewly."
+
+### Step 3: Verify OTP
+
+```bash
+./scripts/auth.sh verify "user@example.com" "847291"
+```
+
+**Success:** Returns JSON with `access_token`
+
+Store token for subsequent requests.
 
 ### Step 4: Fetch Locked Specs
 
-Call the Supabase RPC function to get specs for the board:
+```bash
+./scripts/fetch-specs.sh "board-uuid" "$ACCESS_TOKEN"
+```
+
+**Success:** Returns array of specs with `morgan_hash`
+
+### Step 5: Verify Morgan Hash
 
 ```bash
-curl -X POST "${CREWLY_SUPABASE_URL}/rest/v1/rpc/get_locked_specs" \
-  -H "apikey: ${CREWLY_ANON_KEY}" \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"p_board_id": "BOARD_ID"}'
+./scripts/verify-hash.sh "card-uuid" "sha256:abc..." "$ACCESS_TOKEN"
 ```
 
-Response is an array of locked specs for the board:
+**Success:** 
 ```json
-[
-  {
-    "card_id": "uuid",
-    "title": "Feature Title",
-    "column_id": "uuid",
-    "spec_json": {
-      "story": {
-        "title": "...",
-        "as_a": "...",
-        "i_want": "...",
-        "so_that": "..."
-      },
-      "acceptance_criteria": ["Given X, when Y, then Z", ...],
-      "dependencies": ["..."],
-      "risks": ["..."],
-      "open_questions": [
-        {
-          "id": "oq_001",
-          "question": "...",
-          "options": [{"label": "...", "info": "..."}],
-          "selected": null,
-          "flagged": false
-        }
-      ],
-      "docs_md": "# Documentation...",
-      "stub_suggestions": [
-        {
-          "path": "src/feature/file.ts",
-          "purpose": "what this file does",
-          "snippet": "// starting code"
-        }
-      ],
-      "metrics": ["Success metric 1", ...]
-    }
-  }
-]
+{"valid": true, "features": {"traceability": true, "bugs_yaml": true, ...}}
 ```
 
-### Step 5: Select a Spec
+### Step 6: Select & Bundle
 
-If multiple specs are returned, ask the user which one to load by showing titles.
+If multiple specs, show titles and let user choose.
 
-Once selected, the spec is ready for DevCrew.
+Bundle spec with verification:
+```json
+{
+  "spec": { ... },
+  "morgan_verified": true,
+  "features": { ... }
+}
+```
 
 ## After Loading Spec
 
-Once the spec is loaded into context:
-
-1. **Summarize** the spec for the user:
+1. **Summarize** the spec:
    - User story (as_a / i_want / so_that)
    - Key acceptance criteria
    - Any flagged open questions
 
-2. **Check for blockers:**
-   - Are there unresolved open questions marked as `flagged: true`?
-   - Are dependencies satisfied?
+2. **Report verification status:**
+   - ✅ "Morgan verified — full traceability enabled"
+   - ⚠️ "Unverified spec — running in basic mode"
 
-3. **Hand off to DevCrew:**
-   - If the spec is ready, tell the user: "Spec loaded. Use the DevCrew skill to begin implementation."
-   - Include the spec in context for DevCrew to consume.
+3. **Hand off — AUTOMATIC:**
+   - After spec is loaded and verified, **immediately proceed to crewly-runner skill**
+   - Do NOT wait for user confirmation
+   - Say: "Spec loaded and verified. Starting implementation..."
 
 ## Error Handling
 
-| Error | Response |
-|-------|----------|
-| Invalid email | "That email isn't registered with Crewly. Check the address or sign up at crewlycodes.com" |
-| Wrong OTP | "That code didn't work. Check your email for the latest code." |
-| Expired OTP | "That code has expired. I'll request a new one." (auto-retry) |
-| Card not found | "I couldn't find that card. Double-check the Card ID." |
-| No access | "You don't have access to that board. Ask the owner to invite you." |
+| Error | Script Exit | Response |
+|-------|-------------|----------|
+| Invalid email | 3 | "That email isn't registered with Crewly." |
+| Wrong OTP | 3 | "That code didn't work. Check your email." |
+| Expired OTP | 3 | "Code expired. Requesting new one." (auto-retry) |
+| Rate limited | 3 | "Too many attempts. Wait 60 seconds." |
+| No board access | 3 | "You don't have access to that board." |
+| Board not found | 3 | "Board not found." |
+| Token expired | 3 | Re-authenticate automatically |
+| Hash invalid | 0 | "⚠️ Spec verification failed. Running in basic mode." |
+| Network error | 2 | "Connection failed. Check network and retry." |
 
-## Example Conversation
+## Fallback Behavior
 
+- **OTP expired:** Automatically request new OTP
+- **Token expired mid-session:** Re-run auth flow
+- **Hash verification fails:** Continue with `morgan_verified: false`
+- **API timeout:** Retry once, then fail with clear error
+- **Empty specs:** "No locked specs found. Lock a card in the web app first."
+
+## Handoff Format
+
+Pass to crewly-runner:
+
+```json
+{
+  "spec": { ... },
+  "morgan_verified": true,
+  "features": {
+    "traceability": true,
+    "bugs_yaml": true,
+    "trace_jsonl": true
+  },
+  "access_token": "..."
+}
 ```
-User: Connect to Crewly and load my auth feature card
+
+## Manual Fallback
+
+If scripts or API are completely unavailable:
+
+1. **Ask user to paste spec JSON directly:**
+   - "API unavailable. Please paste the spec JSON from Crewly Codes web app."
+   - Web app: Board → Card → "Copy Spec JSON" button
+
+2. **Accept pasted spec:**
+   ```json
+   {
+     "title": "Feature Name",
+     "spec_json": { "story": {...}, "acceptance_criteria": [...] }
+   }
+   ```
+
+3. **Set verification status:**
+   - `morgan_verified: false` (cannot verify without API)
+   - Warn: "Running in basic mode without traceability."
+
+4. **Proceed to crewly-runner** with unverified spec.
